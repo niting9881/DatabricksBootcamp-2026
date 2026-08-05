@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Support Ticketing System</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+  <style>
+    body { background: #f0f2f5; }
+    .navbar { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
+    .stats-bar { background: #fff; border-bottom: 1px solid #e0e0e0; }
+    .stat-pill { border-radius: 20px; font-weight: 600; font-size: 13px; padding: 4px 14px; }
+    .ticket-list { height: calc(100vh - 160px); overflow-y: auto; }
+    .ticket-item { cursor: pointer; border-left: 4px solid transparent; transition: all 0.2s; }
+    .ticket-item:hover { background: #f8f9ff; border-left-color: #6c63ff; }
+    .ticket-item.active { background: #eef0ff; border-left-color: #6c63ff; }
+    .priority-high   { border-left-color: #dc3545 !important; }
+    .priority-medium { border-left-color: #fd7e14 !important; }
+    .priority-low    { border-left-color: #198754 !important; }
+    .badge-open        { background: #0d6efd; }
+    .badge-in_progress { background: #fd7e14; }
+    .badge-resolved    { background: #198754; }
+    .badge-high   { background: #dc3545; }
+    .badge-medium { background: #fd7e14; }
+    .badge-low    { background: #198754; }
+    .detail-panel { height: calc(100vh - 160px); overflow-y: auto; background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+    .message-bubble { background: #f8f9fa; border-radius: 12px; padding: 12px 16px; margin-bottom: 10px; }
+    .message-bubble .author { font-weight: 600; color: #6c63ff; font-size: 13px; }
+    .empty-state { color: #aaa; text-align: center; padding: 60px 20px; }
+    .empty-state i { font-size: 56px; opacity: .3; }
+    #toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 9999; }
+  </style>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar navbar-dark px-4 py-2">
+  <span class="navbar-brand fw-bold fs-5"><i class="bi bi-ticket-perforated me-2"></i>Support Ticketing</span>
+  <button class="btn btn-sm btn-outline-light" data-bs-toggle="modal" data-bs-target="#newTicketModal">
+    <i class="bi bi-plus-lg me-1"></i>New Ticket
+  </button>
+</nav>
+
+<!-- Stats bar -->
+<div class="stats-bar px-4 py-2 d-flex gap-3 align-items-center">
+  <small class="text-muted fw-semibold">TICKETS:</small>
+  <span class="stat-pill badge badge-open text-white" id="stat-total">Total: —</span>
+  <span class="stat-pill badge badge-open text-white" id="stat-open">Open: —</span>
+  <span class="stat-pill badge badge-in_progress text-white" id="stat-in_progress">In Progress: —</span>
+  <span class="stat-pill badge badge-resolved text-white" id="stat-resolved">Resolved: —</span>
+</div>
+
+<!-- Main layout -->
+<div class="container-fluid px-3 pt-3">
+  <div class="row g-3">
+    <!-- Left: Ticket list -->
+    <div class="col-md-4 col-lg-3">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="fw-semibold text-secondary small">ALL TICKETS</span>
+        <select class="form-select form-select-sm w-auto" id="status-filter" onchange="applyFilter()">
+          <option value="">All statuses</option>
+          <option value="open">Open</option>
+          <option value="in_progress">In Progress</option>
+          <option value="resolved">Resolved</option>
+        </select>
+      </div>
+      <div class="ticket-list" id="ticket-list">
+        <div class="empty-state"><i class="bi bi-inbox d-block"></i><p class="mt-2">Loading…</p></div>
+      </div>
+    </div>
+    <!-- Right: Detail panel -->
+    <div class="col-md-8 col-lg-9">
+      <div class="detail-panel p-4" id="detail-panel">
+        <div class="empty-state">
+          <i class="bi bi-cursor-text d-block"></i>
+          <p class="mt-3 fs-6">Select a ticket to view details</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- New Ticket Modal -->
+<div class="modal fade" id="newTicketModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-plus-circle me-2"></i>New Ticket</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="new-ticket-error" class="alert alert-danger d-none"></div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Title <span class="text-danger">*</span></label>
+          <input type="text" class="form-control" id="new-title" placeholder="Describe the issue briefly">
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Priority</label>
+          <select class="form-select" id="new-priority">
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" onclick="submitNewTicket()">
+          <i class="bi bi-send me-1"></i>Create Ticket
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+let currentTicketId = null;
+
+async function api(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+
+function toast(msg, type='success') {
+  const id = 'toast-' + Date.now();
+  const color = type === 'success' ? 'bg-success' : 'bg-danger';
+  document.getElementById('toast-container').insertAdjacentHTML('beforeend',
+    `<div id="${id}" class="toast align-items-center text-white ${color} border-0 mb-2 show" role="alert">
+       <div class="d-flex"><div class="toast-body">${msg}</div>
+       <button class="btn-close btn-close-white me-2 m-auto" onclick="document.getElementById('${id}').remove()"></button></div>
+     </div>`);
+  setTimeout(() => document.getElementById(id)?.remove(), 3500);
+}
+
+async function loadStats() {
+  const s = await api('GET', '/stats');
+  document.getElementById('stat-total').textContent       = `Total: ${s.total}`;
+  document.getElementById('stat-open').textContent        = `Open: ${s.open}`;
+  document.getElementById('stat-in_progress').textContent = `In Progress: ${s.in_progress}`;
+  document.getElementById('stat-resolved').textContent    = `Resolved: ${s.resolved}`;
+}
+
+async function loadTickets(status = '') {
+  const url = status ? `/tickets?status=${status}` : '/tickets';
+  const tickets = await api('GET', url);
+  const list = document.getElementById('ticket-list');
+  if (!tickets.length) {
+    list.innerHTML = `<div class="empty-state"><i class="bi bi-inbox d-block"></i><p class="mt-2">No tickets found</p></div>`;
+    return;
+  }
+  list.innerHTML = tickets.map(t => `
+    <div class="ticket-item card mb-2 p-3 priority-${t.priority}" onclick="selectTicket(${t.ticket_id})"
+         id="ticket-item-${t.ticket_id}">
+      <div class="d-flex justify-content-between align-items-start">
+        <div class="fw-semibold text-truncate me-2" style="max-width:180px">${escHtml(t.title)}</div>
+        <span class="badge badge-${t.status} text-white small">${fmt(t.status)}</span>
+      </div>
+      <div class="d-flex gap-2 mt-1">
+        <span class="badge badge-${t.priority} text-white" style="font-size:11px">${t.priority}</span>
+        <small class="text-muted">${relTime(t.created_at)}</small>
+      </div>
+      <small class="text-muted mt-1">${escHtml(t.created_by)}</small>
+    </div>`).join('');
+  if (currentTicketId) highlightItem(currentTicketId);
+}
+
+function applyFilter() {
+  loadTickets(document.getElementById('status-filter').value);
+}
+
+async function selectTicket(id) {
+  currentTicketId = id;
+  highlightItem(id);
+  const panel = document.getElementById('detail-panel');
+  panel.innerHTML = `<div class="text-center py-5"><div class="spinner-border text-primary"></div></div>`;
+  try {
+    const { ticket, messages } = await api('GET', `/tickets/${id}`);
+    renderDetail(ticket, messages);
+  } catch(e) {
+    panel.innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-circle d-block"></i><p class="mt-3">${e.message}</p></div>`;
+    toast(e.message, 'error');
+  }
+}
+
+function renderDetail(t, messages) {
+  const panel = document.getElementById('detail-panel');
+  const msgHtml = messages.length
+    ? messages.map(m => `
+        <div class="message-bubble">
+          <div class="d-flex justify-content-between">
+            <span class="author"><i class="bi bi-person-circle me-1"></i>${escHtml(m.author)}</span>
+            <small class="text-muted">${relTime(m.created_at)}</small>
+          </div>
+          <p class="mb-0 mt-1">${escHtml(m.message_text)}</p>
+        </div>`).join('')
+    : `<p class="text-muted fst-italic">No messages yet. Be the first to reply.</p>`;
+
+  panel.innerHTML = `
+    <div class="d-flex justify-content-between align-items-start mb-3">
+      <div>
+        <h5 class="fw-bold mb-1">${escHtml(t.title)}</h5>
+        <div class="d-flex gap-2 flex-wrap">
+          <span class="badge badge-${t.status} text-white">${fmt(t.status)}</span>
+          <span class="badge badge-${t.priority} text-white">${t.priority} priority</span>
+          <small class="text-muted align-self-center">by ${escHtml(t.created_by)} · ${relTime(t.created_at)}</small>
+        </div>
+      </div>
+      <button class="btn btn-sm btn-outline-danger" onclick="confirmDelete(${t.ticket_id})">
+        <i class="bi bi-trash"></i>
+      </button>
+    </div>
+    <div class="card mb-4 border-0 bg-light">
+      <div class="card-body py-2 d-flex align-items-center gap-3">
+        <span class="fw-semibold text-secondary small">UPDATE STATUS</span>
+        <select class="form-select form-select-sm w-auto" id="status-select">
+          <option value="open"        ${t.status==='open'?'selected':''}>Open</option>
+          <option value="in_progress" ${t.status==='in_progress'?'selected':''}>In Progress</option>
+          <option value="resolved"    ${t.status==='resolved'?'selected':''}>Resolved</option>
+        </select>
+        <button class="btn btn-sm btn-primary" onclick="submitStatusUpdate(${t.ticket_id})">
+          <i class="bi bi-check2 me-1"></i>Update
+        </button>
+      </div>
+    </div>
+    <h6 class="fw-semibold text-secondary mb-3"><i class="bi bi-chat-dots me-1"></i>MESSAGES (${messages.length})</h6>
+    <div id="messages-list">${msgHtml}</div>
+    <div class="mt-3">
+      <div id="msg-error" class="alert alert-danger d-none"></div>
+      <div class="input-group">
+        <textarea class="form-control" id="msg-text" rows="2" placeholder="Write a reply…"></textarea>
+        <button class="btn btn-primary" onclick="submitMessage(${t.ticket_id})">
+          <i class="bi bi-send"></i>
+        </button>
+      </div>
+    </div>`;
+}
+
+async function submitNewTicket() {
+  const title    = document.getElementById('new-title').value.trim();
+  const priority = document.getElementById('new-priority').value;
+  const errEl    = document.getElementById('new-ticket-error');
+  if (!title) { errEl.textContent = 'Title is required.'; errEl.classList.remove('d-none'); return; }
+  errEl.classList.add('d-none');
+  try {
+    const t = await api('POST', '/tickets', { title, priority });
+    bootstrap.Modal.getInstance(document.getElementById('newTicketModal')).hide();
+    document.getElementById('new-title').value = '';
+    toast(`Ticket #${t.ticket_id} created`);
+    await loadTickets(document.getElementById('status-filter').value);
+    await loadStats();
+    selectTicket(t.ticket_id);
+  } catch(e) { errEl.textContent = e.message; errEl.classList.remove('d-none'); }
+}
+
+async function submitStatusUpdate(id) {
+  const status = document.getElementById('status-select').value;
+  try {
+    await api('PATCH', `/tickets/${id}/status`, { status });
+    toast('Status updated');
+    await Promise.all([loadTickets(document.getElementById('status-filter').value), loadStats()]);
+    selectTicket(id);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function submitMessage(id) {
+  const text  = document.getElementById('msg-text').value.trim();
+  const errEl = document.getElementById('msg-error');
+  if (!text) { errEl.textContent = 'Message cannot be empty.'; errEl.classList.remove('d-none'); return; }
+  errEl.classList.add('d-none');
+  try {
+    await api('POST', `/tickets/${id}/messages`, { message_text: text });
+    document.getElementById('msg-text').value = '';
+    toast('Message added');
+    selectTicket(id);
+  } catch(e) { errEl.textContent = e.message; errEl.classList.remove('d-none'); }
+}
+
+async function confirmDelete(id) {
+  if (!confirm(`Delete ticket #${id}? This will also delete all its messages and cannot be undone.`)) return;
+  try {
+    await api('DELETE', `/tickets/${id}`);
+    currentTicketId = null;
+    document.getElementById('detail-panel').innerHTML =
+      `<div class="empty-state"><i class="bi bi-trash d-block"></i><p class="mt-2">Ticket deleted</p></div>`;
+    toast(`Ticket #${id} deleted`);
+    await Promise.all([loadTickets(document.getElementById('status-filter').value), loadStats()]);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmt(s) { return s.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase()); }
+function relTime(ts) {
+  const d = new Date(ts), now = new Date();
+  const s = Math.floor((now - d) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s/60)}m ago`;
+  if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+  return d.toLocaleDateString();
+}
+function highlightItem(id) {
+  document.querySelectorAll('.ticket-item').forEach(el => el.classList.remove('active'));
+  document.getElementById(`ticket-item-${id}`)?.classList.add('active');
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  loadTickets();
+  loadStats();
+});
+</script>
+</body>
+</html>

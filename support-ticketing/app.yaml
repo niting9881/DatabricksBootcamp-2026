@@ -1,0 +1,19 @@
+command:
+  - "python"
+  - "app.py"
+
+# ── Credential configuration ──────────────────────────────────────────────────
+# The app reads the Lakebase connection URL from a Databricks Secret.
+# Create the secret once before deploying:
+#
+#   databricks secrets create-scope lakebase
+#   databricks secrets put-secret lakebase url \
+#     --string-value "postgresql://student:<password>@<host>:5432/databricks_postgres?sslmode=require"
+#
+# The app will then read it automatically via lakebase.py.
+# ─────────────────────────────────────────────────────────────────────────────
+env:
+  - name: LAKEBASE_SECRET_SCOPE
+    value: "lakebase"
+  - name: LAKEBASE_SECRET_KEY
+    value: "url"
