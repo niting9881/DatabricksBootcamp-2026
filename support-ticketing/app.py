@@ -1,8 +1,8 @@
 """
-Support Ticketing System — Databricks App
-Backed by Lakebase Postgres via lakebase.py
+Support Ticketing System + Weather Intelligence — Databricks App
+Backed by Lakebase Postgres (psycopg2) + pgvector semantic search.
 
-Routes:
+Ticketing routes:
   GET  /                          Serve UI
   GET  /healthz                   Health check
   GET  /tickets[?status=]         List tickets (optional status filter)
@@ -12,15 +12,22 @@ Routes:
   POST /tickets/<id>/messages     Add message
   DELETE /tickets/<id>            Delete ticket (with cascade)
   GET  /stats                     Count tickets by status
+
+Weather Intelligence routes (Homework 2):
+  POST /weather/sync              Harvest NWS alerts + forecasts into Lakebase
+  POST /weather/search            Semantic similarity search over weather docs
+  GET  /weather/search            Same as POST (query param variant)
 """
 
 import logging
 import os
+from datetime import datetime, timezone
 
 from databricks.sdk import WorkspaceClient
 from flask import Flask, jsonify, render_template, request
 
 import lakebase
+import weather_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ticketing-app")
@@ -28,8 +35,21 @@ logger = logging.getLogger("ticketing-app")
 app = Flask(__name__)
 _w = WorkspaceClient()
 
-VALID_STATUSES = ("open", "in_progress", "resolved")
+VALID_STATUSES   = ("open", "in_progress", "resolved")
 VALID_PRIORITIES = ("low", "medium", "high")
+
+# ── Embedding model (lazy-loaded once on first weather search) ──────────────────
+_EMBED_MODEL = None
+
+def _get_embed_model():
+    """Load sentence-transformers model once and cache globally."""
+    global _EMBED_MODEL
+    if _EMBED_MODEL is None:
+        from sentence_transformers import SentenceTransformer
+        logger.info("Loading embedding model all-MiniLM-L6-v2 ...")
+        _EMBED_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+        logger.info("Embedding model ready")
+    return _EMBED_MODEL
 
 
 def _current_user() -> str:
@@ -187,7 +207,212 @@ def stats():
     return jsonify(totals)
 
 
-# ── Error handler ─────────────────────────────────────────────────────────────
+# ── Weather: Sync ──────────────────────────────────────────────────────────────
+
+DEFAULT_LOCATIONS = ["Chicago, IL", "Austin, TX", "Miami, FL", "Seattle, WA", "New York, NY"]
+
+@app.route("/weather/sync", methods=["POST"])
+def weather_sync():
+    """
+    POST /weather/sync
+    Body: {"locations": ["Chicago, IL", "Austin, TX"], "limit": 50}
+    Harvests NWS alerts + forecasts, upserts into weather_documents.
+    Stretch Goal 2: ON CONFLICT DO UPDATE — re-sync never creates duplicates;
+    changed narrative_text triggers deletion of stale embeddings.
+    """
+    data      = request.get_json() or {}
+    locations = data.get("locations") or DEFAULT_LOCATIONS
+    limit     = int(data.get("limit") or 50)
+
+    # Validate
+    if not isinstance(locations, list) or not locations:
+        return jsonify({"status": "error", "message": "locations must be a non-empty list"}), 400
+    limit = max(1, min(limit, 500))
+
+    # Ensure tables exist
+    lakebase.ensure_weather_tables()
+
+    # Harvest
+    try:
+        docs = weather_client.fetch_weather_documents(locations, limit=limit)
+    except Exception as exc:
+        logger.exception("Weather harvest failed")
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+    if not docs:
+        return jsonify({
+            "status": "success", "synced_count": 0,
+            "message": "No weather documents returned (no active alerts or forecast data)",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+    # Upsert into Lakebase (with stale-embedding invalidation)
+    try:
+        counts = lakebase.upsert_weather_documents(docs)
+    except Exception as exc:
+        logger.exception("Weather upsert failed")
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+    alerts_count    = sum(1 for d in docs if d["source_type"] == "alert")
+    forecasts_count = sum(1 for d in docs if d["source_type"] == "forecast")
+
+    return jsonify({
+        "status":        "success",
+        "synced_count":  len(docs),
+        "message":       f"Synced {len(docs)} weather documents",
+        "timestamp":     datetime.now(timezone.utc).isoformat(),
+        "data": {
+            "alerts":            alerts_count,
+            "forecasts":         forecasts_count,
+            "new_documents":     counts.get("inserted", 0),
+            "updated_documents": counts.get("updated", 0),
+        },
+    })
+
+
+# ── Weather: Search ─────────────────────────────────────────────────────────────
+
+@app.route("/weather/search", methods=["POST", "GET"])
+def weather_search():
+    """
+    POST /weather/search
+    Body: {"query": "flash flood risk", "top_k": 5,
+           "source_type": "alert",  # optional filter
+           "location": "Chicago, IL",  # optional filter
+           "generate_summary": true}   # optional LLM summary (Stretch Goal 1)
+
+    GET  /weather/search?query=flooding&top_k=5&source_type=alert
+
+    Embeds query with all-MiniLM-L6-v2 and runs pgvector cosine similarity search.
+    """
+    # Accept both POST JSON body and GET query params
+    if request.method == "POST":
+        body = request.get_json() or {}
+    else:
+        body = request.args
+
+    raw_query = (body.get("query") or "").strip()
+    if not raw_query:
+        return jsonify({"status": "error", "message": "query is required"}), 400
+    if len(raw_query) > 1000:
+        return jsonify({"status": "error",
+                        "message": "query must be 1–1000 characters"}), 400
+
+    try:
+        top_k = int(body.get("top_k") or 5)
+        top_k = max(1, min(top_k, 20))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "top_k must be an integer 1–20"}), 400
+
+    source_type      = (body.get("source_type") or "").strip() or None
+    location_filter  = (body.get("location") or "").strip() or None
+    generate_summary = str(body.get("generate_summary") or "").lower() in ("true", "1", "yes")
+
+    # Check embeddings table is non-empty
+    count_rows = lakebase.run_query("SELECT COUNT(*) AS n FROM weather_embeddings")
+    if not count_rows or count_rows[0]["n"] == 0:
+        return jsonify({
+            "status":        "success",
+            "query":         raw_query,
+            "results_count": 0,
+            "results":       [],
+            "message":       "No weather documents indexed yet. Run POST /weather/sync then the embedding ingestion script.",
+            "timestamp":     datetime.now(timezone.utc).isoformat(),
+        })
+
+    # Embed query
+    try:
+        model     = _get_embed_model()
+        query_vec = model.encode([raw_query])[0].tolist()
+        vec_str   = "[" + ",".join(f"{v:.8f}" for v in query_vec) + "]"
+    except Exception as exc:
+        logger.exception("Embedding model error")
+        return jsonify({"status": "error", "message": f"Embedding failed: {exc}"}), 500
+
+    # Build cosine similarity query with optional filters
+    where_clauses = []
+    params: list = []
+    if source_type:
+        where_clauses.append("d.source_type = %s")
+        params.append(source_type)
+    if location_filter:
+        where_clauses.append("d.location ILIKE %s")
+        params.append(f"%{location_filter}%")
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    # pgvector <=> = cosine distance; 1 - distance = similarity
+    sql = f"""
+        SELECT
+            d.id            AS document_id,
+            d.location,
+            d.source_type,
+            d.headline,
+            d.issued_at,
+            e.chunk_text,
+            1 - (e.embedding <=> %s::vector) AS similarity_score
+        FROM weather_embeddings e
+        JOIN weather_documents  d ON d.id = e.document_id
+        {where_sql}
+        ORDER BY e.embedding <=> %s::vector
+        LIMIT %s
+    """
+    # vec_str appears twice (SELECT + ORDER BY) then top_k
+    query_params = [vec_str] + params + [vec_str, top_k]
+
+    try:
+        rows = lakebase.run_query(sql, query_params)
+    except Exception as exc:
+        logger.exception("Vector search failed")
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+    results = [
+        {
+            "rank":             i + 1,
+            "document_id":      r["document_id"],
+            "location":         r["location"],
+            "source_type":      r["source_type"],
+            "headline":         r["headline"],
+            "chunk_text":       r["chunk_text"],
+            "similarity_score": round(float(r["similarity_score"]), 4),
+            "issued_at":        r["issued_at"].isoformat() if r["issued_at"] else None,
+        }
+        for i, r in enumerate(rows)
+    ]
+
+    response = {
+        "status":        "success",
+        "query":         raw_query,
+        "top_k":         top_k,
+        "results_count": len(results),
+        "results":       results,
+        "timestamp":     datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Stretch Goal 1: LLM-generated summary using Databricks Foundation Models
+    if generate_summary and results:
+        try:
+            context = "\n\n".join(r["chunk_text"] for r in results[:3])
+            prompt  = (
+                f'Based on these weather documents, provide a brief (2–3 sentence) '
+                f'summary of the key weather risks or conditions relevant to '
+                f'\"{ raw_query }\":\n\n{context}'
+            )
+            completion = _w.serving_endpoints.query(
+                name="databricks-meta-llama-3-3-70b-instruct",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=150,
+            )
+            summary_text = completion.choices[0].message.content.strip()
+            response["summary"] = summary_text
+        except Exception as exc:
+            logger.warning("LLM summary failed (non-fatal): %s", exc)
+            response["summary"] = None
+
+    return jsonify(response)
+
+
+# ── Error handler ──────────────────────────────────────────────────────────────
 
 @app.errorhandler(Exception)
 def handle_exception(err):

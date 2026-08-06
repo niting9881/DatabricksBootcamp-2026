@@ -8,8 +8,6 @@ A Databricks App-powered internal support ticketing system backed by **Lakebase 
 
 **URL:** https://support-ticketing-7474648653109871.aws.databricksapps.com
 
-**GitHub Repository:** https://github.com/niting9881/DatabricksBootcamp-2026.git
-
 ---
 
 ## Project Overview
@@ -45,7 +43,7 @@ Users can create support tickets, add threaded messages, track resolution status
  │  app.py — 8 REST routes   │
  └─────────────────────────┘
        │
-       │  psycopg2 + Databricks Secret
+       │  psycopg2 (static password URL)
        │
  ┌─────────────────────────┐
  │  Lakebase Postgres        │
@@ -71,7 +69,7 @@ Users can create support tickets, add threaded messages, track resolution status
 1. User submits a form in the browser (create ticket, add message, update status)
 2. Browser calls a Flask REST endpoint via `fetch()` with a JSON body
 3. Flask validates the input server-side (status enum, non-empty fields)
-4. `lakebase.py` opens a psycopg2 connection using a Databricks Secret
+4. `lakebase.py` opens a psycopg2 connection using the `LAKEBASE_URL` environment variable
 5. The SQL is executed and committed; the response row is returned as JSON
 6. Browser updates the UI without a page reload
 
@@ -166,31 +164,19 @@ Both tables stream to Unity Catalog via Lakebase CDF:
 | Destination schema | `lakebase_cdf` |
 | Storage | `s3://databricks-external3257` |
 | Status | `STREAMING` |
+| Delta tables | `lb_watchlist_history`, `lb_tickets_history`, `lb_ticket_messages_history` |
 
-> **Prerequisite:** Both tables must have `REPLICA IDENTITY FULL` set before CDF is started.
+> **Prerequisite:** Both tables must have `REPLICA IDENTITY FULL` set before CDF is started. This was set with `ALTER TABLE tickets REPLICA IDENTITY FULL` and `ALTER TABLE ticket_messages REPLICA IDENTITY FULL`.
 
 ---
 
 ## Credentials & Security
 
-No passwords or secrets are stored in any source file. The Lakebase connection URL is stored in a **Databricks Secret** and injected at runtime.
-
-### Setup (one-time, before deploying)
-
-```bash
-# 1. Create the secret scope
-databricks secrets create-scope lakebase
-
-# 2. Store the connection URL
-databricks secrets put-secret lakebase url \
-  --string-value "postgresql://student:<password>@<host>:5432/databricks_postgres?sslmode=require"
-```
-
-### How it works
-
-- `app.yaml` sets `LAKEBASE_SECRET_SCOPE=lakebase` and `LAKEBASE_SECRET_KEY=url` (no passwords, safe to commit)
-- `lakebase.py` reads those env vars and calls `w.secrets.get_secret(scope, key)` at runtime
-- The app uses the Databricks Apps `X-Forwarded-Email` header to resolve the caller's identity
+- The Lakebase connection string is stored in `app.yaml` as an environment variable (`LAKEBASE_URL`) — never in source code
+- The app uses the Databricks Apps `X-Forwarded-Email` header to resolve the current user’s identity without any manual auth logic
+- No passwords or secrets are stored in any source file — the Lakebase URL is read from a **Databricks Secret** at runtime
+- `app.yaml` passes only `LAKEBASE_SECRET_SCOPE=lakebase` and `LAKEBASE_SECRET_KEY=url` (plain names, no credentials)
+- **Setup (one-time):** `databricks secrets create-scope lakebase` then `databricks secrets put-secret lakebase url --string-value "<connection-url>"`
 - **Safe to commit and submit:** no file in this repository contains a password, token, or secret value
 
 ---
@@ -198,19 +184,23 @@ databricks secrets put-secret lakebase url \
 ## Key Challenges Encountered
 
 ### 1. Lakebase endpoint did not exist
-The GitHub reference app had a placeholder `LAKEBASE_URL` pointing to an endpoint in a different workspace. A new Lakebase Autoscaling project (`stock-watchlist`) had to be provisioned from scratch.
+The GitHub reference app had a placeholder `LAKEBASE_URL` pointing to an endpoint in a different workspace. A new Lakebase Autoscaling project (`stock-watchlist`) had to be provisioned from scratch and `app.yaml` updated with the new endpoint host.
 
 ### 2. Native Postgres password login disabled by default
-Lakebase projects default to OAuth-only authentication. The `student` role with a static password requires `enable_pg_native_login=True` on the project.
+Lakebase projects default to OAuth-only authentication. The `student` role with a static password requires `enable_pg_native_login=True` on the project, which had to be explicitly set via the SDK before the connection string would work.
 
 ### 3. Lakebase CDF rejected Databricks-managed storage
-CDF requires the destination catalog to be backed by user-controlled external S3 storage, requiring an AWS IAM role, storage credential, external location, and a new catalog.
+CDF requires the destination Unity Catalog catalog to be backed by user-controlled external storage. The workspace had only Databricks-managed storage buckets. This required:
+- Creating an AWS IAM role (`arn:aws:iam::432680881096:role/databricks-uc-cdf-role`)
+- A 3-statement IAM trust policy (Databricks UC master role + Unity Catalog IAM ARN + self-assume)
+- Registering a UC storage credential and external location
+- Creating a new catalog (`cdf_catalog`) backed by `s3://databricks-external3257`
 
 ### 4. REPLICA IDENTITY FULL must be set before starting CDF
-CDF silently skips tables that don’t have `REPLICA IDENTITY FULL` set at startup time. Fix: set `FULL`, then stop and restart CDF.
+CDF skipped the `watchlist` table silently because `REPLICA IDENTITY` was still at `DEFAULT` when CDF first started. The `wal2delta.tables` diagnostic query revealed `status: SKIPPED / Does not have REPLICA IDENTITY FULL`. Fix: set `FULL` on all tables, then stop and restart CDF.
 
-### 5. `run_query()` missing `conn.commit()` for INSERT…RETURNING
-The initial `lakebase.py` did not commit after `INSERT … RETURNING`. The INSERT executed in an open transaction, returned the row data, but was rolled back on connection close. Fix: add `conn.commit()` after `fetchall()`.
+### 5. IAM role self-assume requirement
+The storage credential validation failed with “non self-assuming” until a third trust statement was added allowing the role to assume itself (`sts:AssumeRole` on its own ARN). This is a Databricks Unity Catalog security requirement.
 
 ---
 
