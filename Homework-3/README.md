@@ -352,7 +352,7 @@ RESPONSE FORMAT
 | Temperature units | Configurable — we request `temperature_unit=fahrenheit` |
 | Wind speed units | Configurable — we request `wind_speed_unit=mph` |
 
-**Why Open-Meteo over alternatives:**
+**Rationale for choosing Open-Meteo over alternatives:**
 
 | Criterion | Open-Meteo | NWS | WeatherAPI.com |
 |---|---|---|---|
@@ -519,6 +519,52 @@ I am planning a trip to Miami, FL this weekend.
 - Current: 82.4°F, Overcast, 79% humidity
 - 5-day: highs in 84–88°F range, 20–45% daily precipitation
 - Saturday recommendation: Bring an umbrella (precipitation >40%). Outdoor activities possible with caution. Confidence: 0.80
+
+---
+
+## 8. Known Limitations
+
+- **Forecast accuracy**: Open-Meteo accuracy degrades beyond ~7 days. The
+  `confidence` score in `predict_weather_recommendation` reflects this —
+  it decreases 5% per day out, with a floor of 0.50 at day 10+.
+- **No severe weather alerts**: The free Open-Meteo tier does not include
+  NOAA/NWS severe weather alerts (tornado warnings, hurricane watches, etc.).
+- **Temperature unit**: All temperatures are returned in Fahrenheit (°F).
+  International users should request Celsius conversion from the agent.
+- **Location ambiguity**: The geocoder picks the highest-population match for
+  ambiguous names (e.g. "Springfield" → Springfield, IL). Always use
+  city + state/country for precision.
+- **Rate limits**: Open-Meteo allows 10,000+ free calls/day, but all broker
+  instances in a deployment share this quota. Production deployments should
+  add a caching layer (e.g. 10-minute TTL on forecast responses).
+- **No historical weather**: The current tools only support present and future
+  dates (up to 16 days ahead). Past-date queries return an error.
+- **Single-location tools**: Each tool call handles one location at a time.
+  Multi-city comparisons require multiple sequential tool calls.
+
+---
+
+## 9. Future Improvements
+
+- **Caching layer**: Add Redis or Databricks-native caching for geocoding
+  results (stable) and recent weather data (10-minute TTL). Estimated
+  60–70% reduction in Open-Meteo API calls.
+- **Stretch tools**:
+  - `get_severe_alerts(location)` — NOAA/NWS severe weather alerts
+  - `get_uv_index(location)` — UV index and sun protection advice
+  - `get_air_quality(location)` — AQI via Open-Meteo air quality API
+  - `get_historical_weather(location, date)` — ERA5 reanalysis data
+  - `compare_cities(city1, city2)` — single-call multi-city comparison
+- **MLflow evaluation notebook**: Automated quality scoring of agent
+  responses against a golden test set using `mlflow.evaluate()`.
+- **Celsius mode**: Add a `units` parameter to all tools for international
+  users (`fahrenheit` / `celsius`).
+- **CI/CD pipeline**: GitHub Actions running `pytest tests/` + `flake8` on
+  every push to `main`.
+- **Dashboard app**: Streamlit or Gradio frontend showing current conditions,
+  forecast charts, and recommendation history (stretch goal).
+- **Multi-language support**: Pass `language` to Open-Meteo geocoding for
+  non-English location names.
 
 ---
 
