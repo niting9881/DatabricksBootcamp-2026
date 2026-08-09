@@ -1,37 +1,17 @@
-# Databricks Apps MCP Server configuration
-# Deploy: databricks apps deploy --source-code-path /Workspace/Users/<user>/Homework-3/mcp_server
+# Databricks Apps deployment configuration
+# Source code path: /Workspace/Users/<user>/Homework-3/mcp_server
+# Deploy via: Apps V2 page or databricks apps deploy
 
-name: weather-prediction-mcp-server
-description: "Weather prediction MCP server with forecasting and recommendation tools"
-version: "1.0.0"
+command: python weather_mcp_server.py
 
-# MCP server entry point
-servers:
-  weather:
-    type: fastmcp
-    command:
-      - python
-      - weather_mcp_server.py
-    env:
-      - LOG_LEVEL=INFO
-      - MLFLOW_EXPERIMENT_NAME=/Shared/weather-mcp-tracing
-      # Databricks secret reference (if using a paid weather API in future):
-      # WEATHER_API_KEY: "{{secrets/weather/api_key}}"
-
-# Python dependencies (installed at deploy time)
-dependencies:
-  - fastmcp>=2.0.0
-  - httpx>=0.27.0
-  - pydantic>=2.0.0
-  - python-dotenv>=1.0.0
-  - mlflow>=2.14.0
-  - uvicorn>=0.30.0
-
-# Port the MCP server listens on
-ports:
-  - 8000
-
-# Logging configuration
-logging:
-  level: INFO
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+env:
+  - name: LOG_LEVEL
+    value: INFO
+  - name: MLFLOW_EXPERIMENT_NAME
+    value: /Shared/weather-mcp-tracing
+  # Databricks secret reference example (if using a paid weather API in future):
+  # - name: WEATHER_API_KEY
+  #   valueFrom:
+  #     secretRef:
+  #       key: api_key
+  #       scope: weather

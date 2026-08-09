@@ -217,7 +217,8 @@ def predict_weather_recommendation(location: str, date: Optional[str] = None) ->
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", os.getenv("APP_PORT", "8000")))
+    # DATABRICKS_APP_PORT is injected by Databricks Apps runtime (default 8000)
+    port = int(os.getenv("DATABRICKS_APP_PORT", os.getenv("PORT", os.getenv("APP_PORT", "8000"))))
     logger.info("Starting Weather MCP server on 0.0.0.0:%d", port)
     logger.info("Tools: get_current_weather | get_forecast | predict_weather_recommendation")
     mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
