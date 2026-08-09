@@ -1,7 +1,7 @@
 # Weather Prediction MCP Server — Databricks Bootcamp 2026 Homework 3
 
 **Author:** learndatabricks31@gmail.com  
-**GitHub:** https://github.com/niting9881/DatabricksBootcamp-2026/tree/main/Homework-3  
+**GitHub:** [niting9881/DatabricksBootcamp-2026 → Homework-3](https://github.com/niting9881/DatabricksBootcamp-2026/tree/main/Homework-3)  
 **Status:** Deployed and Running
 
 ---
