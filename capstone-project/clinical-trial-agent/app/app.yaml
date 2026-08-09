@@ -1,0 +1,20 @@
+# Clinical Trial Matching Agent - Databricks App Configuration
+command:
+  - streamlit
+  - run
+  - app.py
+  - --server.port
+  - "8501"
+
+env:
+  - name: LAKEBASE_PROJECT_ID
+    value: clinical-trial-agent
+  - name: LAKEBASE_BRANCH_ID
+    value: production
+  - name: LAKEBASE_ENDPOINT_ID
+    value: primary
+  - name: LAKEBASE_DATABASE
+    value: databricks_postgres
+
+features:
+  - lakebase

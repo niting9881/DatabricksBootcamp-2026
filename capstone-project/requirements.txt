@@ -1,0 +1,39 @@
+# ============================================================================
+# Clinical Trial Matching Agent — Top-Level Requirements
+# ============================================================================
+# Install in Databricks notebook:
+#   %pip install -r requirements.txt
+#
+# The app/ subdirectory has its own requirements.txt for the Streamlit frontend.
+# ============================================================================
+
+# --- Databricks SDK (Lakebase + Apps) ---
+databricks-sdk>=0.118.0
+
+# --- Database ---
+psycopg2-binary>=2.9.9
+
+# --- HTTP / API clients ---
+requests>=2.31.0
+
+# --- Embeddings ---
+sentence-transformers>=2.7.0
+torch>=2.0.0
+
+# --- Agent / LLM orchestration ---
+langchain>=0.2.0
+langchain-community>=0.2.0
+openai>=1.30.0
+
+# --- MLflow (tracking + tracing) ---
+mlflow>=2.14.0
+
+# --- Data processing ---
+pandas>=2.0.0
+numpy>=1.26.0
+
+# --- XML parsing (PubMed) ---
+# xml.etree.ElementTree is stdlib — no install needed
+
+# --- Note: PySpark and Spark SQL are pre-installed on Databricks ---
+# --- Do not add pyspark here; it conflicts with the Databricks runtime. ---
