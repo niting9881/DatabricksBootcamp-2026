@@ -14,6 +14,61 @@
 
 ---
 
+## Recent Improvements (Post-Submission Review)
+
+The following features were implemented in response to reviewer feedback. See [`improvements.md`](improvements.md) for the full implementation plan.
+
+### 1. Change Data Feed (CDF) Analytics
+
+- Delta CDF enabled on all key Silver/Gold tables: `ct_trials_silver`, `pubmed_articles_silver`, `fda_drug_labels_silver`, `disease_area_summary_gold`
+- New Delta analytics table `workspace.default.agent_actions_cdf_analytics` built using `table_changes()`, capturing per-table change counts, change types, and commit timestamps over time
+- Analytics schema designed to surface tool-call counts, match writes over time, and approval rates in the Eval Dashboard tab
+- CDF layer is the foundation for a full Lakehouse-side event log that mirrors app write-backs (`patient_trial_matches`, `enrollment_recommendations`, `agent_feedback`) into Delta for downstream BI and observability
+
+```sql
+-- table_changes() pattern used in agent_actions_cdf_analytics:
+SELECT source_table, event_date, change_type,
+       COUNT(*) AS records_changed, MAX(_commit_timestamp) AS latest_commit_ts
+FROM table_changes('catalog.default.ct_trials_silver', start_version)
+GROUP BY event_date, change_type
+```
+
+### 2. App Write-Back Actions (Approve / Reject / Run Agent)
+
+- **Approve / Reject callbacks**: Each match card in Tab 1 (Patient Match) now has live buttons that `INSERT` into `agent_feedback` and `UPDATE` `patient_trial_matches.status` to `approved` or `rejected`
+- **Success toasts**: `st.success()` / `st.error()` banners confirm every write
+- **Run Agent button**: Triggers `run_agent(patient_id)` directly in-process and immediately refreshes the match list
+- **Session state**: Results cached in `st.session_state` so the view updates without a full page reload
+
+### 3. Pre-Persist Guardrails
+
+Before any match is written to `patient_trial_matches`, the agent validates:
+
+| Check | Condition |
+|-------|-----------|
+| NCT ID integrity | `nct_id` must exist in `clinical_trials` — no hallucinated IDs |
+| Confidence bounds | Must be within `[0.40, 0.85]` — configurable in `config.py` |
+| Drug interaction check | Interaction check must have been executed for the trial |
+| Evidence citation | At least one PMID required when `require_evidence_citation = True` |
+
+Failed guardrails are logged to `agent_traces.guardrail_violations`; the match is not persisted.
+
+### 4. Vision Tab Hardened
+
+- Replaced the placeholder `st.info()` message with a live analysis path using `ai_query('databricks-llama-4-maverick', prompt)` via the Databricks Foundation Model API
+- **Images** (X-ray, scan): extracted findings shown as structured JSON in the UI
+- **PDFs** (lab reports, pathology): `ai_parse_document` extraction path with parsed output displayed inline
+- Extracted conditions and diagnoses are structured and ready to pass directly to the trial matching agent
+
+### 5. App Reliability and UX Polish
+
+- **Exception banners**: all Lakebase connectivity failures render as `st.error()` banners with actionable messages
+- **Spinners**: `st.spinner()` wraps all database queries and agent calls
+- **Retry logic**: connection helper retries with exponential back-off on transient PostgreSQL errors
+- **`@st.cache_resource` refresh**: stale token detection forces re-authentication rather than crashing
+
+---
+
 ## Capstone Requirements Coverage
 
 | Requirement | Implementation | Status |
